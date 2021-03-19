@@ -1,0 +1,37 @@
+---
+title: "plots_format"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# load library
+library(plotDrugScreen)
+
+# set directory
+output_dir = "../output/"
+
+# load data
+data(gdsc_plate_maps)
+data(raw_ccle)
+```
+
+```{r GDSC_format}
+# GDSC
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotFormat_gdsc(drugset = "505_f_16")
+toPlot[[2]] <- plotFormat_gdsc(drugset = "712_b_17")
+pdf(paste0(output_dir, "GDSCformats.pdf"), width = 9, height = 13)
+multiplot(plotlist = toPlot, cols = 1)
+dev.off()
+```
+
+```{r CCLE_format}
+# CCLE
+pdf(paste0(output_dir, "CCLEformat.pdf"), width = 12, height = 10)
+plotFormat_ccle(plate = "VA40033459")
+dev.off()
+```

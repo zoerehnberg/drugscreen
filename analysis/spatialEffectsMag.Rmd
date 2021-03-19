@@ -1,0 +1,104 @@
+---
+title: "spatialEffectsMag"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# set directories
+data_dir = "../data/"
+
+# needed data
+load(paste0(data_dir, "processed/raw_gdsc.rda"))
+```
+
+```{r}
+# quantify horizontal spatial effcts
+# * use the untreated control wells
+# * take the absolute difference between the median of the left bar of controls
+# (column 2 or 3) and the median of the right bar (column 23) for each plate
+# * plateType can either be "H" or "BAR"
+getSpatialMag <- function(dat = raw_gdsc, plateType){
+  # helper function
+  get.col <- function(position, len){
+    if(position %% len == 0) return((position %% len) + len)
+    else return(position %% len)
+  }
+
+  # get plate type
+  plate <- subset(dat, SITE == "WTSI" & TAG == "NC-0",
+                  select = c("SCAN_ID","DRUGSET_ID","POSITION","INTENSITY"))
+  plate$SPLIT <- sapply(plate$DRUGSET_ID,
+                        function(x) strsplit(x, split = "_")[[1]][1])
+
+  if(plateType == "H"){
+    # subset to plates with the H format
+    plate <- subset(plate, SPLIT %in% c("711","712","713","714"))
+    plate$COL <- sapply(plate$POSITION, get.col, len = 24)
+
+    leftCol <- 2
+    rightCol <- 23
+  }
+  else if(plateType == "BAR"){
+    # subset to plates with the BAR format
+    plate <- subset(plate, SPLIT %in% c("505","506","507","508"))
+    plate$COL <- sapply(plate$POSITION, get.col, len = 24)
+
+    leftCol <- 3
+    rightCol <- 23
+  }
+  else{
+    stop("Invalid plate type.")
+  }
+
+  # get absolute difference for each plate
+  scans <- unique(plate$SCAN_ID)
+  allAbsDiff <- vector(mode = "numeric", length = length(scans))
+  for(i in 1:length(scans)){
+    tmp <- subset(plate, SCAN_ID == scans[i])
+    leftMed <- median(subset(tmp, COL == leftCol)$INTENSITY, na.rm = TRUE)
+    rightMed <- median(subset(tmp, COL == rightCol)$INTENSITY, na.rm = TRUE)
+
+    allAbsDiff[i] <- abs(leftMed - rightMed)
+  }
+  return(allAbsDiff)
+}
+```
+
+```{r process_spatial1}
+# * plates with H controls
+mag_H <- getSpatialMag(plateType = "H")
+mag_H <- mag_H[!is.na(mag_H)]              # remove 12 NAss
+```
+
+```{r process_spatial2}
+# * plates with BAR controls
+mag_BAR <- getSpatialMag(plateType = "BAR")
+```
+
+```{r}
+# overall, 14.5% of H-plates and bar-plate have a spatial difference
+# bigger than 0.25
+(sum(mag_H > 0.25) + sum(mag_BAR > 0.25))/(length(mag_H) + length(mag_BAR))
+
+sum(mag_H > 0.25)/length(mag_H)
+sum(mag_BAR > 0.25)/length(mag_BAR)
+```
+
+```{r}
+# overall, 52.5% of H-plates and bar-plate have a spatial difference
+# bigger than 0.1
+(sum(mag_H > 0.1) + sum(mag_BAR > 0.1))/(length(mag_H) + length(mag_BAR))
+
+sum(mag_H > 0.1)/length(mag_H)
+sum(mag_BAR > 0.1)/length(mag_BAR)
+```
+
+```{r}
+# * get spatial magnitude for example in the paper
+getSpatialMag(dat = subset(raw_gdsc, SCAN_ID == 41524), plateType = "BAR")
+2^getSpatialMag(dat = subset(raw_gdsc, SCAN_ID == 41524), plateType = "BAR")
+```

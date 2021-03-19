@@ -1,0 +1,22 @@
+---
+title: "Download data"
+---
+
+This downloads the original data from the online sources.  The date downloaded is:
+```{r get_date}
+format(Sys.Date(), format="%Y %B %d")
+```
+
+```{r download_data}
+base_directory = "original/"
+
+curl::curl_download("https://github.com/CancerRxGene/gdscdata/raw/master/data/gdsc_nlme_stats.rda", paste0(base_directory, "gdsc_nlme_stats.rda"))
+curl::curl_download("https://github.com/CancerRxGene/gdscdata/raw/master/data/gdsc_plate_maps.rda", paste0(base_directory, "gdsc_plate_maps.rda"))
+curl::curl_download("https://github.com/CancerRxGene/gdscdata/raw/master/data/gdsc_v17.rda", paste0(base_directory, "gdsc_v17.rda"))
+
+curl::curl_download("ftp://ftp.sanger.ac.uk/pub/project/cancerrxgene/releases/current_release/Cell_Lines_Details.xlsx", paste0(base_directory, "GDSC_cells.xlsx"))
+curl::curl_download("ftp://ftp.sanger.ac.uk/pub/project/cancerrxgene/releases/current_release/screened_compunds_rel_8.2.csv", paste0(base_directory, "GDSC_drugs.csv"))
+curl::curl_download("https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-018-0722-x/MediaObjects/41586_2018_722_MOESM1_ESM.txt", paste0(base_directory, "ccle_orig.tsv"))
+curl::curl_download("https://data.broadinstitute.org/ccle_legacy_data/pharmacological_profiling/CCLE_NP24.2009_Drug_data_2015.02.24.csv", paste0(base_directory, "processedCCLEdata.csv"))
+curl::curl_download("https://static-content.springer.com/esm/art%3A10.1038%2Fnature15736/MediaObjects/41586_2015_BFnature15736_MOESM23_ESM.xlsx", paste0(base_directory, "GDSC_to_CCLE.xlsx"))
+```

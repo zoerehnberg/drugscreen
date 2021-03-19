@@ -1,0 +1,117 @@
+---
+title: "quantifyCheckerboard"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# set directories
+data_dir = "../data/"
+
+# needed data
+load(paste0(data_dir, "original/gdsc_plate_maps.rda"))
+load(paste0(data_dir, "processed/raw_gdsc.rda"))
+```
+
+```{r}
+# ** quantify checkerboard pattern **
+getCheckerboard <- function(dat, formatData = gdsc_plate_maps){
+  get.wellsMatrix <- function(dat, drugset){
+    # merge with format data
+    tmp <- subset(formatData, DRUGSET_ID == drugset)
+    dat <- dat[,c("SCAN_ID","POSITION","INTENSITY")]
+    untreated.wells <- merge(x = tmp, y = dat, by = "POSITION")
+    untreated.wells <- untreated.wells[,c("DOWN","ACROSS","INTENSITY")]
+
+    # put into a matrix
+    if(max(tmp$POSITION) > 96){
+      matrix.rows <- 16
+      matrix.cols <- 24
+    }
+    else{
+      matrix.rows <- 8
+      matrix.cols <- 12
+    }
+
+    wellsMatrix <- matrix(NA, nrow = (matrix.rows + 2), ncol = (matrix.cols + 2))
+    # place each intensity in row + 1 and col + 1
+    intoMatrix <- function(vec, mat){
+      mat[(vec[1] + 1), (vec[2] + 1)] <- vec[3]
+      return(mat)
+    }
+    for(i in 1:nrow(untreated.wells)){
+      wellsMatrix <- intoMatrix(vec = as.numeric(untreated.wells[i,]),
+                                mat = wellsMatrix)
+    }
+
+    return(wellsMatrix)
+  }
+
+  # get format data
+  formatData <- subset(formatData, TAG == "NC-0",
+                       select = c("DRUGSET_ID","POSITION","DOWN","ACROSS"))
+  formatData$DOWN <- as.numeric(factor(formatData$DOWN,
+                                       levels = toupper(letters[1:26])))
+
+  # get untreated controls
+  dat <- subset(dat, TAG == "NC-0")
+  all.scn <- unique(dat$SCAN_ID)
+  return.data <- data.frame(SCAN_ID = all.scn, TOTAL = NA, NEG = NA,
+                            POS = NA, CHECKER = NA)
+  for(k in 1:length(all.scn)){
+    tmp <- subset(dat, SCAN_ID == all.scn[k],
+                  select = c("SCAN_ID","DRUGSET_ID","POSITION","INTENSITY"))
+    drugset <- tmp$DRUGSET_ID[1]
+
+    # get the wells matrix
+    wellsMatrix <- get.wellsMatrix(dat = tmp, drugset = drugset)
+
+    # compare mean of adjacent wells to the well of interest
+    compareMatrix <- matrix(NA, nrow = (nrow(wellsMatrix) - 2),
+                            ncol = (ncol(wellsMatrix) - 2))
+    for(i in 2:(nrow(wellsMatrix) - 1)){
+      for(j in 2:(ncol(wellsMatrix) - 1)){
+        compareMatrix[i-1,j-1] <- 2*(wellsMatrix[i,j] >=
+                                       mean(c(wellsMatrix[i,j-1],
+                                              wellsMatrix[i,j+1],
+                                              wellsMatrix[i-1,j],
+                                              wellsMatrix[i+1,j]),
+                                            na.rm = TRUE)) - 1
+      }
+    }
+
+    # make the checkerboard matrix
+    vec <- rep(c(1,-1), ncol(compareMatrix)/2)
+    checkerboard <- matrix(rep(c(vec, -1*vec), nrow(compareMatrix)/2),
+                           nrow = nrow(compareMatrix),
+                           ncol = ncol(compareMatrix),
+                           byrow = TRUE)
+
+    # element-wise multiplication with the checkerboard matrix,
+    checkerProd <- checkerboard*compareMatrix
+    allChecker <- sum(checkerProd, na.rm = TRUE)/sum(!is.na(checkerProd))
+
+    # data to return
+    return.data[k,2] <- sum(!is.na(checkerProd))
+    return.data[k,3] <- sum(checkerProd < 0, na.rm = TRUE)
+    return.data[k,4] <- sum(checkerProd > 0, na.rm = TRUE)
+    return.data[k,5] <- allChecker
+  }
+  return(return.data)
+}
+```
+
+```{r process_checkerboard}
+UC_checker <- getCheckerboard(dat = raw_gdsc)
+
+# remove 96-well plates (only have 6 untreated controls)
+UC_checker <- subset(UC_checker, TOTAL > 6)
+```
+
+```{r}
+# 9.8% of plates have checkerboard measure >= 0.5
+nrow(subset(UC_checker, abs(CHECKER) >= 0.5))/nrow(UC_checker)
+```

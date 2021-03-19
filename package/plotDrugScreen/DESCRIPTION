@@ -1,0 +1,16 @@
+Package: plotDrugScreen
+Type: Package
+Title: Plotting Functions for Assessment of Drug Screening Data
+Authors@R:c(
+	person("Zoe L","Rehnberg",email = "zrehnber@umich.edu", role = "cre"),
+	person("Johann A", "Gagnon-Bartsch", email = "johanngb@umich.edu", role = "aut"))
+Description: A set of functions to create plots (format, heatmap, and dose-response curve) for the drug screening data from GDSC and CCLE.
+License: GPL-3
+Date: 2021-03-02
+Version: 0.9
+Depends: R (>= 3.5.0)
+Imports:
+	ggplot2,
+	grid,
+	colorspace
+RoxygenNote: 7.1.1

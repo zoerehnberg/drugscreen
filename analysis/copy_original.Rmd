@@ -1,0 +1,24 @@
+---
+title: "copy_original"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# set directories
+data_dir = "../data/"
+```
+
+```{r cells}
+GDSC_cells <- readxl::read_xlsx(paste0(data_dir, "original/GDSC_cells.xlsx"),
+                                sheet = 2)
+save(GDSC_cells, file = paste0(data_dir, "processed/GDSC_cells.rda"), compress = "xz")
+```
+
+```{r drugs}
+GDSC_drugs <- readr::read_csv(paste0(data_dir, "original/GDSC_drugs.csv"))
+save(GDSC_drugs, file = paste0(data_dir, "processed/GDSC_drugs.rda"), compress = "xz")
+```

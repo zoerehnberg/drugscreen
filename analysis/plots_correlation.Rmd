@@ -1,0 +1,255 @@
+---
+title: "plots_correlation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# load library
+library(plotDrugScreen)
+library(ggplot2)
+
+# set directory
+output_dir = "../output/"
+
+# load data
+data(gdsc_nlme_stats)
+dup1 <- c("156","1014","1036","1058")
+dup2 <- c("1066","1526","1371","1527")
+
+data(raw_ccle)
+data(ccleAUC)
+data(ccleAUC_group)
+```
+
+# Correlation for GDSC Sigmoidal AUC
+
+```{r GDSC_AUC}
+# * get all sigmoid AUCs
+get.sigmoidAUC <- function(dat = gdsc_nlme_stats){
+  sigmoidStats <- dat[,c("SCAN_ID","CL","DRUG_ID_lib","maxc","auc")]
+  sigmoidStats <- sigmoidStats[!duplicated(sigmoidStats),]
+  colnames(sigmoidStats)[2:5] <- c("COSMIC_ID","DRUG_ID","MAXC","AUC")
+  return(sigmoidStats)
+}
+sigmoidAUC <- get.sigmoidAUC()
+
+# * get duplicated sigmoid AUCs
+dupAUC <- reps_gdsc(data = sigmoidAUC)
+dupAUC <- merge_gdsc(dupAUC)
+
+# * get correlation of AUCs
+AUCcorr <- data.frame(drug1 = dup1, drug2 = dup2, corr = NA)
+for(i in 1:4){
+  tmp1 <- subset(dupAUC, DRUG_ID.x == dup1[i])
+  AUCcorr[i,3] <- cor(tmp1$AUC.x, tmp1$AUC.y,
+                      use = "na.or.complete")
+}
+readr::write_tsv(AUCcorr, paste0(output_dir, "GDSC_AUC_correlation.txt"))
+
+# * correlation plots
+corrPlot <- function(i, dat = dupAUC){
+  tmp1 <- subset(dat, DRUG_ID.x == dup1[i])
+  toplot[[i]] <- ggplot(data = tmp1, aes(x = AUC.x, y = AUC.y)) +
+    geom_point(alpha = 0.2, size = 2) +
+    scale_x_continuous(limits = c(0,1)) +
+    scale_y_continuous(limits = c(0,1)) +
+    labs(x = paste0("Replicate 1 (ID ",dup1[i],")"),
+         y = paste0("Replicate 2 (ID ",dup2[i],")"), title = dnames[i],
+         subtitle = round(cor(tmp1$AUC.x, tmp1$AUC.y),4)) +
+    theme(title = element_text(size = 16),
+          axis.text = element_text(size = 10),
+          axis.title = element_text(size = 14))
+}
+dnames <- c("AZD6482", "Refametinib", "PLX-4720", "Pictilisib")
+toplot <- vector(mode = "list", length = 4)
+toplot <- lapply(1:4, corrPlot)
+pdf(paste0(output_dir, "GDSCcorrAUC.pdf"), width = 18, height = 5)
+multiplot(plotlist = toplot, cols = 4)
+dev.off()
+```
+
+# Correlation for GDSC Sigmoidal IC50
+
+```{r GDSC_IC50}
+# * get all sigmoid IC50s
+get.sigmoidIC50 <- function(dat = gdsc_nlme_stats){
+  sigmoidIC50 <- dat[,c("SCAN_ID","CL","DRUG_ID_lib","maxc","IC50")]
+  sigmoidIC50 <- sigmoidIC50[!duplicated(sigmoidIC50),]
+  colnames(sigmoidIC50)[2:4] <- c("COSMIC_ID","DRUG_ID","MAXC")
+  return(sigmoidIC50)
+}
+sigmoidIC50 <- get.sigmoidIC50()
+
+# * get duplicated sigmoid IC50s
+dupIC50 <- reps_gdsc(data = sigmoidIC50)
+dupIC50 <- merge_gdsc(dupIC50)
+
+# * get correlations of IC50s
+ICcorr <- data.frame(drug1 = dup1, drug2 = dup2, corr = NA, corr_sensitive = NA)
+for(i in 1:4){
+  tmp1 <- subset(dupIC50, DRUG_ID.x == dup1[i])
+  ICcorr[i,3] <- cor(log2(exp(tmp1$IC50.x)), log2(exp(tmp1$IC50.y)),
+                     use = "na.or.complete")
+  tmp1 <- subset(dupIC50, DRUG_ID.x == dup1[i] & IC50.x <= log(MAXC.x) &
+                   IC50.y <= log(MAXC.y))
+  ICcorr[i,4] <- cor(log2(exp(tmp1$IC50.x)), log2(exp(tmp1$IC50.y)),
+                     use = "na.or.complete")
+}
+readr::write_tsv(ICcorr, paste0(output_dir, "GDSC_IC50_correlation.txt"))
+```
+
+# Correlation for CCLE Recalculated AUC
+
+```{r CCLE_AUC}
+# * correlation of AUCs
+dnames <- unique(ccleAUC_group$COMPOUND)
+AUCcorr_ccle <- data.frame(drug = dnames, corr = NA)
+for(i in 1:27){
+  tmp <- subset(ccleAUC_group, COMPOUND == AUCcorr_ccle[i,1])
+  AUCcorr_ccle[i,2] <- cor(tmp$T_MUC.x, tmp$T_MUC.y)
+}
+readr::write_tsv(AUCcorr_ccle, paste0(output_dir, "CCLE_AUC_correlation.txt"))
+
+# * correlation plots
+corrPlot <- function(i, dat = ccleAUC_group){
+  tmp <- subset(dat, COMPOUND == dnames[i])
+  toplot[[i]] <- ggplot(data = tmp, aes(x = T_MUC.x, y = T_MUC.y)) +
+    geom_point(alpha = 0.2, size = 2) +
+    scale_x_continuous(limits = c(0,1.05)) +
+    scale_y_continuous(limits = c(0,1.05)) +
+    labs(x = "", y = "", title = dnames[i],
+         subtitle = round(cor(tmp$T_MUC.x, tmp$T_MUC.y),4)) +
+    theme(title = element_text(size = 16),
+          axis.text = element_text(size = 10))
+}
+toplot <- vector(mode = "list", length = 27)
+toplot <- lapply(1:27, corrPlot)
+pdf(paste0(output_dir, "CCLEcorrAUC.pdf"), width = 15, height = 25)
+multiplot(plotlist = toplot, cols = 4)
+dev.off()
+```
+
+```{r CCLE}
+# * median correlation for ineffective vs. broadly effective compounds
+# BROAD EFFECT:
+tmp <- aggregate(ccleAUC$MUC, list(ccleAUC$COMPOUND), mad)
+eff <- subset(tmp, x > 0.13)$Group.1
+median(subset(AUCcorr_ccle, drug %in% eff)$corr)
+
+# NARROW EFFECT
+tmp <- subset(ccleAUC, !(COMPOUND %in% eff) & MUC < 0.8)
+tmp <- tmp[,1:2]
+tmp <- tmp[!duplicated(tmp),]
+median(subset(AUCcorr_ccle, drug %in% unique(tmp$COMPOUND))$corr)
+```
+
+```{r CCLE_location1}
+# * correlation based on location of replicates
+tmp <- subset(raw_ccle, COMBO_ID %in% c(ccleAUC_group$COMBO_ID.x,
+                                        ccleAUC_group$COMBO_ID.y),
+              select = c("COMBO_ID","COLUMN_ID","ROW_ID","CONCENTRATION"))
+tmp <- subset(tmp, CONCENTRATION == 8)
+tmp$CONCENTRATION <- NULL
+
+extra_ccle <- merge(x = ccleAUC_group, y = tmp, by.x = "COMBO_ID.x", by.y = "COMBO_ID")
+extra_ccle <- merge(x = extra_ccle, y = tmp, by.x = "COMBO_ID.y", by.y = "COMBO_ID")
+extra_ccle$SAME_LOC <- ((extra_ccle$COLUMN_ID.x == extra_ccle$COLUMN_ID.y) &
+                          (extra_ccle$ROW_ID.x == extra_ccle$ROW_ID.y))
+extra_ccle$Location <- factor(ifelse(extra_ccle$SAME_LOC, "Same", "Different"))
+
+AUCcorr <- data.frame(drug = dnames, all_corr = NA, same_corr = NA, diff_corr = NA)
+for(i in 1:27){
+  tmp <- subset(extra_ccle, COMPOUND == AUCcorr[i,1])
+  AUCcorr[i,2] <- cor(tmp$T_MUC.x, tmp$T_MUC.y)
+  AUCcorr[i,3] <- cor(subset(tmp, SAME_LOC)$T_MUC.x, subset(tmp, SAME_LOC)$T_MUC.y)
+  AUCcorr[i,4] <- cor(subset(tmp, !SAME_LOC)$T_MUC.x, subset(tmp, !SAME_LOC)$T_MUC.y)
+}
+readr::write_tsv(AUCcorr, paste0(output_dir, "CCLE_AUC_correlation_location.txt"))
+```
+
+```{r CCLE_location2}
+# * color correlation plots by location of replicates
+# ** ALL REPLICATES **
+cp <- c("Same" = "orange", "Different" = "blue")
+corrPlot <- function(i, dat = extra_ccle){
+  tmp <- subset(dat, COMPOUND == dnames[i])
+  toplot[[i]] <- ggplot(data = tmp,
+                        aes(x = T_MUC.x, y = T_MUC.y, color = Location)) +
+    geom_point(alpha = 0.2, size = 2) +
+    scale_color_manual(values = cp) +
+    scale_x_continuous(limits = c(0,1.05)) +
+    scale_y_continuous(limits = c(0,1.05)) +
+    labs(x = "", y = "", title = dnames[i]) +
+    theme(title = element_text(size = 17),
+          axis.text = element_text(size = 12),
+          legend.text = element_text(size = 13),
+          legend.title = element_text(size = 15),
+          legend.position = "bottom")
+}
+toplot <- vector(mode = "list", length = 27)
+toplot <- lapply(1:27, corrPlot)
+pdf(paste0(output_dir, "CCLEcorrAUC_colorAll.pdf"), width = 20, height = 35)
+multiplot(plotlist = toplot, cols = 4)
+dev.off()
+```
+
+```{r CCLE_location3}
+# ** SAME LOCATION REPLICATES **
+same_loc <- subset(extra_ccle, SAME_LOC)
+same_loc$Location <- apply(same_loc, 1, function(x) paste0("Row ", x[10],
+                                                           ", Col ", x[9]))
+same_loc$Location <- factor(same_loc$Location)
+cp <- c("darkgoldenrod", "deepskyblue3", "magenta")
+corrPlot <- function(i, dat = same_loc){
+  tmp <- subset(dat, COMPOUND == dnames[i])
+  toplot[[i]] <- ggplot(data = tmp,
+                        aes(x = T_MUC.x, y = T_MUC.y,  color = Location)) +
+    geom_point(alpha = 0.3, size = 2) +
+    scale_color_manual(values = cp) +
+    scale_x_continuous(limits = c(0,1.05)) +
+    scale_y_continuous(limits = c(0,1.05)) +
+    labs(x = "", y = "", title = dnames[i]) +
+    theme(title = element_text(size = 17),
+          axis.text = element_text(size = 12),
+          legend.text = element_text(size = 9),
+          legend.title = element_text(size = 11),
+          legend.position = "bottom")
+}
+toplot <- vector(mode = "list", length = 27)
+toplot <- lapply(1:27, corrPlot)
+pdf(paste0(output_dir, "CCLEcorrAUC_colorSame.pdf"), width = 20, height = 35)
+multiplot(plotlist = toplot, cols = 4)
+dev.off()
+```
+
+```{r CCLE_location4}
+# ** FIVE COMPOUNDS **
+use.drug <- c("NVP-LBN777-NX-1","NVP-RAF265-NX-1","NVP-LBN816-AA-1",
+              "NVP-LBH589-CU-2","NVP-BAG500-NX-4")
+tmp <- subset(extra_ccle, COMPOUND %in% use.drug)
+tmp <- merge(x = tmp,
+             y = data.frame(COMPOUND = use.drug,
+                            DRUG_NAME = c("Irinotecan","NVP-RAF265","Topotecan",
+                                          "Panobinostat","Tanespimycin")),
+             by = "COMPOUND")
+cp <- c("Same" = "orange", "Different" = "blue")
+
+pdf(paste0(output_dir, "CCLEcorrAUC_location.pdf"), width = 25, height = 6)
+ggplot(data = tmp, aes(x = T_MUC.x, y = T_MUC.y, color = Location)) +
+  geom_point(alpha = 0.4, size = 2) +
+  facet_grid(col = vars(DRUG_NAME)) +
+  scale_color_manual(values = cp) +
+  scale_x_continuous(limits = c(0,1.05)) +
+  scale_y_continuous(limits = c(0,1.05)) +
+  labs(x = "", y = "") +
+  theme(axis.text = element_text(size = 14),
+        legend.position = "bottom",
+        legend.text = element_text(size = 18),
+        legend.title = element_text(size = 20),
+        strip.text = element_text(size = 20))
+dev.off()
+```

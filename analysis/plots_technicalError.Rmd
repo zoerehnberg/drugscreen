@@ -1,0 +1,370 @@
+---
+title: "plots_technicalError"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# load library
+library(plotDrugScreen)
+library(ggplot2)
+library(gdscIC50)
+
+# set directory
+output_dir = "../output/"
+
+# load data
+data(gdsc_plate_maps)
+data(gdsc_nlme_stats)
+data(raw_gdsc)
+data(norm_gdsc)
+
+data(raw_ccle)
+data(norm_ccle)
+```
+
+# Spatial Effects and Checkerboard Pattern
+
+```{r spatial_checkerboard1}
+# * for the whole plate
+clean_heat <- plotHeat_gdsc(scan = 91023)
+clean_DR <- plotDR_gdsc(CL = 1479988, drug1 = 273, drug2 = NA, title = "",
+                            connect = TRUE)
+spatial_heat <- plotHeat_gdsc(scan = 41524)
+spatial_DR <- plotDR_gdsc(CL = 907290, drug1 = 1038, drug2 = 1011,
+                              manScale = 1.6, title = "", connect = TRUE)
+g_checker_heat <- plotHeat_gdsc(scan = 26460)
+g_checker_DR <- plotDR_gdsc(CL = 724855, drug1 = 1042, drug2 = NA,
+                                title = "",  manScale = 1.6, connect = T)
+
+c_checker_heat <- plotHeat_ccle(scan = "VA40003905")
+c_checker_DR <- plotDR_ccle(combo1 = 32302, combo2 = NA, manScale = 2,
+                               title = "", connect = TRUE)
+
+pdf(paste0(output_dir, "checker_spatial1.pdf"), width = 8, height = 12)
+multiplot(plotlist = list(clean_heat, g_checker_heat), cols = 1)
+dev.off()
+pdf(paste0(output_dir, "checker_spatial2.pdf"), width = 5.5, height = 12)
+multiplot(plotlist = list(clean_DR, g_checker_DR), cols = 1)
+dev.off()
+pdf(paste0(output_dir, "checker_spatial3.pdf"), width = 8, height = 12)
+multiplot(plotlist = list(spatial_heat, c_checker_heat), cols = 1)
+dev.off()
+pdf(paste0(output_dir, "checker_spatial4.pdf"), width = 5.5, height = 12)
+multiplot(plotlist = list(spatial_DR, c_checker_DR), cols = 1)
+dev.off()
+
+# other gradient examples:
+# plot.heat_gdsc(scan = 67435)
+# plot.heat_gdsc(scan = 41525)
+# plot.heat_gdsc(scan = 41517)
+```
+
+```{r spatial_checkerboard2}
+# CCLE spatial effects
+# * get lowest concentration wells
+tmp <- subset(norm_ccle, CONCENTRATION < 0.0026, select = c(4,7,8))
+names(tmp)[2] <- "LOW"
+# * get second lowest concentration wells
+tmp <- merge(x = tmp, y = subset(norm_ccle, CONCENTRATION < 0.025 &
+                                   CONCENTRATION > 0.0026, select = c(4,7)),
+             by = "COMBO_ID")
+tmp[,2:4] <- log2(tmp[,2:4])
+
+sum(tmp$LOW - tmp$MUC > 0.1)/50748
+sum(tmp$VALUE - tmp$MUC > 0.1)/50748
+```
+
+```{r spatial_checkerboard3}
+# * format plots
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotFormat_gdsc(drugset = "22_a_7") +
+  labs(title = "Plate 91023") + theme(title = element_text(size = 21))
+toPlot[[2]] <- plotFormat_gdsc(drugset = "506_f_6") +
+  labs(title = "Plate 41524") + theme(title = element_text(size = 21))
+pdf(paste0(output_dir, "GDSCspatial_format.pdf"), width = 26, height = 10)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotFormat_gdsc(drugset = "506_f_6") +
+  labs(title = "Plate 26460") + theme(title = element_text(size = 21))
+toPlot[[2]] <- plotFormat_ccle(plate = "VA40003905") +
+  labs(title = "Plate VA40003905") + theme(title = element_text(size = 21))
+pdf(paste0(output_dir, "checker_format.pdf"), width = 26, height = 10)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+```
+
+```{r spatial_checkerboard5}
+# * for the untreated controls
+# heatmap of controls for MEDIAN of drugset
+median.heatmap <- function(dat = raw_gdsc, drugset, cont.typ, title = NA){
+
+  # subset to the drugset ID and the control type of interest
+  use.dat <- subset(dat, DRUGSET_ID == drugset & TAG %in% cont.typ,
+                    select = c("POSITION","INTENSITY"))
+
+  # get row/column info
+  if(max(use.dat$POSITION) > 100){
+    nwells <- 384
+    COL <- rep(1:24,16)
+    ROW <- rep(1:16, each = 24)
+  }
+  else{
+    nwells <- 96
+    COL <- rep(1:12,8)
+    ROW <- rep(1:8, each = 12)
+  }
+
+  # calculate median intensities
+  med.int <- rep(NA, nwells)
+  for(i in 1:nwells){
+    tmp <- subset(use.dat, POSITION == i)
+    if(nrow(tmp) > 0) med.int[i] <- median(tmp$INTENSITY)
+  }
+  plot.dat <- data.frame(med.int, ROW, COL)
+
+  if(is.na(title)) title <- paste0("Median of Drugset ", drugset)
+
+  return(ggplot(data = plot.dat, aes(x = COL, y = ROW)) +
+           geom_tile(aes(fill = med.int), color = "white") +
+           scale_fill_gradientn(colors = colorspace::diverge_hcl(4)) +
+
+           scale_x_continuous(breaks = unique(plot.dat$COL),
+                              labels = interleave(seq(1, max(plot.dat$COL), 2), "")) +
+           scale_y_reverse(breaks = unique(plot.dat$ROW),
+                           labels = interleave(seq(1, max(plot.dat$ROW), 2), "")) +
+
+           labs(x = "", y = "", title = title) +
+           guides(fill = guide_colorbar(title = expression(atop("Intensity",
+                                                                "(log"[2]*")")),
+                                        ticks = FALSE)) +
+           theme(panel.background = element_rect(fill = "black",
+                                                 color = "black"),
+                 panel.grid = element_blank(),
+                 axis.text = element_text(size = 14),
+                 title = element_text(size = 18),
+                 legend.title = element_text(size = 16),
+                 legend.text = element_text(size = 16)))
+}
+raw_uc <- subset(raw_gdsc, TAG == "NC-0")
+toPlot <- vector(mode = "list", length = 4)
+toPlot[[1]] <- plotHeat_gdsc(data = raw_uc, scan = 77074)
+toPlot[[2]] <- median.heatmap(drugset = "712_f_17", cont.typ = "NC-0", title = "")
+toPlot[[3]] <- plotHeat_gdsc(data = raw_uc, scan = 47083)
+toPlot[[4]] <- median.heatmap(drugset = "508_b_5", cont.typ = "NC-0", title = "")
+pdf(paste0(output_dir, "GDSCucspatial_supp.pdf"), width = 19, height = 12)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+```
+
+```{r spatial_checkerboard6}
+# * plates with checkerboard = 0.5
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotHeat_gdsc(data = raw_uc, scan = 56524)
+toPlot[[2]] <- plotHeat_gdsc(data = raw_uc, scan = 63134)
+pdf(paste0(output_dir, "quant_checkerboard.pdf"), width = 16)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+```
+
+# Shifted
+
+```{r shifted_GDSC}
+# GDSC
+# * plot relative viability on the log2 scale
+tmp1 <- subset(norm_gdsc, COSMIC_ID == 908448 & DRUG_ID == 1527,
+               select = c("CONC","RV_MUC"))
+tmp1 <- rbind(tmp1, data.frame(CONC = rep(NA,4), RV_MUC = rep(NA,4)))
+tmp2 <- subset(norm_gdsc, COSMIC_ID == 908448 & DRUG_ID == 1058,
+               select = c("CONC","RV_MUC"))
+names(tmp2) <- c("CONC2", "RV_MUC2")
+plot.dat <- cbind(tmp1, tmp2)
+
+pdf(paste0(output_dir, "GDSCshift.pdf"), width = 8)
+ggplot(data = plot.dat) +
+  geom_point(aes(x = log2(CONC), y = log2(RV_MUC)),
+             shape = 4, size = 3, stroke = 2) +
+  geom_point(aes(x = log2(CONC2), y = log2(RV_MUC2)),
+             shape = 1, size = 3, stroke = 2, color = "red") +
+  labs(x = expression("dose (log"["2 "]*mu*"M)"),
+       y = expression("relative viability (log"[2]*")"), shape  = "") +
+  theme(axis.text = element_text(size = 17),
+        axis.title = element_text(size = 21))
+dev.off()
+```
+
+```{r shifted_CCLE}
+# CCLE
+# * relative viability on log2 scale
+tmp1 <- subset(norm_ccle, COMBO_ID == 44976, select = c("CONCENTRATION","RV_MUC"))
+tmp2 <- subset(norm_ccle, COMBO_ID == 4879, select = c("CONCENTRATION","RV_MUC"))
+names(tmp2) <- c("CONCENTRATION2", "RV_MUC2")
+plot.dat <- cbind(tmp1, tmp2)
+
+pdf(paste0(output_dir, "CCLEshift.pdf"), width = 8)
+ggplot(data = plot.dat) +
+  geom_point(aes(x = log2(CONCENTRATION), y = log2(RV_MUC)),
+             shape = 4, size = 3, stroke = 2) +
+  geom_point(aes(x = log2(CONCENTRATION2), y = log2(RV_MUC2)),
+             shape = 1, size = 3, stroke = 2, color = "red") +
+  labs( x = expression("dose (log"["2 "]*mu*"M)"),
+        y = expression("relative viability (log"["2"]*")"),nshape  = "") +
+  theme(axis.text = element_text(size = 17),
+        axis.title = element_text(size = 21))
+dev.off()
+```
+
+```{r shifted_cartoon}
+# cartoon example
+toPlot <- vector(mode = "list", length = 3)
+plot.dat <- data.frame(x = -6:2, y = rep(1.2,9))
+toPlot[[1]] <- ggplot(data = plot.dat, aes(x = x, y = y)) +
+  geom_point(shape = 19, size = 2, stroke = 1.5, color = "red") +
+  geom_line(color = "red") +
+  geom_area(fill = "red", alpha = 0.3) +
+  geom_abline(aes(slope = 0, intercept = 1), linetype = "dotdash", size = 0.8) +
+  labs(x = expression("dose (log2 "*mu*"M)"), y = "relative viability") +
+  coord_fixed(ylim = c(0, 1.5), ratio = 8) +
+  theme(title = element_text(size = 17),
+        axis.text = element_text(size = 13))
+
+plot.dat <- data.frame(x = -6:2, y = rep(0.8,9))
+toPlot[[2]] <- ggplot(data = plot.dat, aes(x = x, y = y)) +
+  geom_point(shape = 19, size = 2, stroke = 1.5, color = "red") +
+  geom_line(color = "red") +
+  geom_area(fill = "red", alpha = 0.3) +
+  geom_abline(aes(slope = 0, intercept = 1), linetype = "dotdash", size = 0.8) +
+  labs(x = expression("dose (log2 "*mu*"M)"), y = "relative viability") +
+  coord_fixed(ylim = c(0, 1.5), ratio = 8) +
+  theme(title = element_text(size = 17),
+        axis.text = element_text(size = 13))
+
+plot.dat <- data.frame(x = -6:2, y = c(1,1,0.98,0.95,0.88,0.78,0.65,0.5,0.33))
+toPlot[[3]] <- ggplot(data = plot.dat, aes(x = x, y = y)) +
+  geom_point(shape = 19, size = 2, stroke = 1.5, color = "red") +
+  geom_line(color = "red") +
+  geom_area(fill = "red", alpha = 0.3) +
+  geom_abline(aes(slope = 0, intercept = 1), linetype = "dotdash", size = 0.8) +
+  labs(x = expression("dose (log2 "*mu*"M)"), y = "relative viability") +
+  coord_fixed(ylim = c(0, 1.5), ratio = 8) +
+  theme(title = element_text(size = 17),
+        axis.text = element_text(size = 13))
+
+pdf(paste0(output_dir, "cartoon.pdf"), width = 15)
+multiplot(plotlist = toPlot, cols = 3)
+dev.off()
+```
+
+# Batch-Specific Outliers
+
+```{r batch_GDSC}
+# GDSC
+# * sigmoidal dose-response curves (code taken/adapted from the CancerRxGene GitHub)
+l3_model2 <- function(lx, maxc, xmid, scal){
+  x <- getXfromConc(2^(lx), maxc)
+  yhat <- 1 - logist3(x, xmid, scal)
+  return(yhat)
+}
+modGDSC.plot <- function(model_stats, cell_line, drug_identifier,
+                          xrange = NULL){
+  # prepare the data
+  `%>%` <- dplyr::`%>%`
+  plot_data <- model_stats %>% dplyr::filter_(~CL == cell_line,
+                                              ~drug == drug_identifier)
+  plot_data <- plot_data %>%
+    dplyr::mutate_(lx = ~log(getConcFromX(x,maxc)),
+                   lxmid = ~log(getConcFromX(xmid, maxc)))
+  plot_xmid <- plot_data %>% dplyr::select_(~xmid) %>% dplyr::distinct()
+  plot_scal <- plot_data %>% dplyr::select_(~scal) %>% dplyr::distinct()
+  plot_maxc <- plot_data %>% dplyr::select_(~maxc) %>% dplyr::distinct()
+  plot_low_x <- 1 - plot_scal$scal * log((1 - 0.001)/0.001) +
+    plot_xmid$xmid
+  plot_low_x <- log(getConcFromX(plot_low_x, +plot_maxc$maxc))
+  plot_low_x <- min(c(plot_data$lx, plot_low_x))
+  plot_high_x <- 1 - plot_scal$scal * log(0.001/(1 - 0.001)) +
+    plot_xmid$xmid
+  plot_high_x <- log(getConcFromX(plot_high_x, plot_maxc$maxc))
+  plot_high_x <- max(c(plot_data$lx, plot_high_x))
+
+  if(length(xrange) == 2){
+    plot_low_x <- xrange[1]
+    plot_high_x <- xrange[2]
+  }
+
+  # make the plot
+  p <- ggplot(plot_data) +
+    aes_(x = ~log2(exp(lx)), y = ~1 - yhat) +
+    scale_x_continuous(limits = c(log2(exp(plot_low_x)),
+                                  log2(exp(plot_high_x)))) +
+    # plot the fitted curve
+    stat_function(aes_(x = ~log2(exp(lx))), fun = l3_model2,
+                  args = list(maxc = plot_maxc$maxc,
+                              xmid = plot_xmid$xmid,
+                              scal = plot_scal$scal)) +
+    # add the observed points
+    geom_point(aes_(x = ~log2(exp(lx)), y = ~1 - y),
+               shape = 4, size = 2, stroke = 1.5) +
+    # add the labels
+    labs(x = expression("dose (log"["2 "]*mu*"M)"),
+       y = "relative viability") +
+    theme(plot.title = element_text(size = 18),
+          plot.subtitle = element_text(size = 16),
+          axis.text = element_text(size = 13),
+          axis.title = element_text(size = 16))
+
+  return(p)
+}
+
+toplot <- vector(mode = "list", length = 6)
+toplot[[1]] <- plotHeat_gdsc(scan = "45669", legendLoc = "bottom")
+toplot[[2]] <- plotHeat_gdsc(scan = "45677", legendLoc = "bottom")
+toplot[[3]] <- plotHeat_gdsc(scan = "45681", legendLoc = "bottom")
+toplot[[4]] <- modGDSC.plot(model_stats = gdsc_nlme_stats, cell_line = 909717,
+                             drug_identifier = "1066_5")
+toplot[[5]] <- modGDSC.plot(model_stats = gdsc_nlme_stats, cell_line = 907172,
+                             drug_identifier = "1066_5")
+toplot[[6]] <- modGDSC.plot(model_stats = gdsc_nlme_stats, cell_line = 949175,
+                             drug_identifier = "1066_5")
+pdf(paste0(output_dir, "GDSCtech.pdf"), width = 16, height = 15)
+multiplot(plotlist = toplot, cols = 3)
+dev.off()
+
+# other examples of technical effects:
+# drug 268 (Sepantronium bromide): row 11 and column 7
+# tmp <- subset(raw_gdsc,  DATE_CREATED == "2012-10-04 19:00:00 CDT" &
+#                 DRUGSET_ID == "22_c_97")
+# drug 290 (KIN001-260): row 14 and column 6
+# tmp <- subset(raw_gdsc, DATE_CREATED == "2012-06-21 19:00:00 CDT" &
+#                 DRUGSET_ID == "21_b_7")
+```
+
+```{r batch_CCLE}
+# CCLE
+toPlot <- vector(mode = "list", length = 4)
+toPlot[[1]] <- plotHeat_ccle(scan = "VA40021637", legendLoc = "bottom")
+toPlot[[2]] <- plotHeat_ccle(scan = "VA40021651", legendLoc = "bottom")
+toPlot[[3]] <-   plotDR_ccle(combo1 = 26733, combo2 = NA, title = "")
+toPlot[[4]] <-   plotDR_ccle(combo1 = 26734, combo2 = NA, title = "")
+pdf(paste0(output_dir, "CCLEtech.pdf"), width = 12, height = 15)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+```
+
+# Noise
+
+```{r noise}
+# GDSC
+pdf(paste0(output_dir, "GDSCnoise.pdf"))
+plotHeat_gdsc(scan = 1930)
+dev.off()
+
+# CCLE
+pdf(paste0(output_dir, "CCLEnoise.pdf"), width = 10)
+plotHeat_ccle(scan = "VA40034573")
+dev.off()
+```

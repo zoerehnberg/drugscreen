@@ -1,0 +1,152 @@
+---
+title: "dataPrep_CCLE"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# set directories
+data_dir = "../data/"
+
+# needed data
+ccle_orig <- read.delim(paste0(data_dir, "original/ccle_orig.tsv"), sep = "\t",
+                        header = TRUE,fileEncoding = "UTF-16")
+```
+
+```{r process_raw}
+# RAW DATA
+# * keep only the raw data
+raw_ccle <- subset(ccle_orig, LAYER_TYPE == "RAW")
+
+# * keep only the controls (NC and AC) and combos tested at 8 concentrations
+# starting at 8 and decreasing in 3.16 fold dilutions
+# * removes 3,104 of 1,157,777 observations
+raw_ccle <- subset(raw_ccle, WELL_TYPE %in% c("NC", "AC") |
+                     CONCENTRATION %in% c(8, 2.53164601, 0.801153719,
+                                          0.253529608, 0.0802308992,
+                                          0.0253895205, 0.00803465955,
+                                          0.00254261401))
+
+# * find the combos that appear at all 8 doses
+# 1,324 of 52,072 total combos have < 8 doses
+tmp <- subset(raw_ccle, WELL_TYPE == "SA")
+tmp <- aggregate(tmp$CONCENTRATION,
+                 by = list(tmp$CELL_LINE_NAME, tmp$COMPOUND,
+                           tmp$ASSAY_PLATE_NAME, tmp$COLUMN_ID), FUN = length)
+
+# * add a COMBO_ID column
+# * this will allow the differentiation between multiple replicates for each
+# drug-CL combination
+tmp$COMBO_ID <- 1:nrow(tmp)
+
+# * keep only the combos that appear at all 8 doses and the control wells
+tmp <- merge(x = raw_ccle, y = tmp[tmp$x == 8,-5],
+             by.x = c("CELL_LINE_NAME","COMPOUND","ASSAY_PLATE_NAME","COLUMN_ID"),
+             by.y = names(tmp)[1:4])
+raw_ccle$COMBO_ID <- NA
+raw_ccle <- rbind(tmp, subset(raw_ccle, WELL_TYPE != "SA"))
+
+# * remove any plates with no drugged wells
+# * removes 258 of 14,445 plates
+drugPlates <- unique(subset(raw_ccle, WELL_TYPE == "SA")$ASSAY_PLATE_NAME)
+raw_ccle <- subset(raw_ccle, ASSAY_PLATE_NAME %in% drugPlates)
+
+# * put intensities on the log2 scale
+raw_ccle$VALUE <- log2(raw_ccle$VALUE)
+save(raw_ccle, file = paste0(data_dir, "processed/raw_ccle.rda"), compress = "xz")
+```
+
+```{r process_relative_viability}
+# RELATIVE VIABILITIES
+# * calculate median intensity of the untreated controls for each plate
+scans <- unique(raw_ccle$ASSAY_PLATE_NAME)
+use.dat <- subset(raw_ccle, WELL_TYPE == "NC",
+                  select = c("ASSAY_PLATE_NAME","VALUE"))
+med_uc <- data.frame(ASSAY_PLATE_NAME = scans, MUC = NA)
+for(i in 1:nrow(med_uc)){
+  med_uc[i,2] <- median(subset(use.dat, ASSAY_PLATE_NAME == scans[i])$VALUE)
+}
+norm_ccle <- subset(raw_ccle, WELL_TYPE == "SA",
+                    select = c("CELL_LINE_NAME","COMPOUND","ASSAY_PLATE_NAME",
+                               "COMBO_ID","WELL_TYPE","CONCENTRATION","VALUE"))
+norm_ccle <- merge(x = norm_ccle, y = med_uc, by = "ASSAY_PLATE_NAME")
+
+# * calculate relative viabilities
+norm_ccle$VALUE <- 2^norm_ccle$VALUE
+norm_ccle$MUC <- 2^norm_ccle$MUC
+norm_ccle$RV_MUC <- norm_ccle$VALUE/norm_ccle$MUC
+norm_ccle$TRV_MUC <- ifelse(norm_ccle$RV_MUC > 1, 1, norm_ccle$RV_MUC)
+save(norm_ccle, file = paste0(data_dir, "processed/norm_ccle.rda"), compress = "xz")
+```
+
+```{r select_replicates}
+# SELECT REPLICATES
+# * returns two replicates for each drug-CL pair
+# * if there are more than two replicates for a given pair, two are randomly
+# selected
+ccleReps <- function(dat){
+  drugCL <- dat[,c("CELL_LINE_NAME","COMPOUND")]
+  drugCL <- drugCL[!duplicated(drugCL),]
+
+  keepDups <- vector(mode = "list", length = nrow(drugCL))
+  for(i in 1:nrow(drugCL)){
+    tmp <- subset(dat, CELL_LINE_NAME == drugCL[i,1] & COMPOUND == drugCL[i,2])
+    numReps <- length(unique(tmp$COMBO_ID))
+    if(numReps == 2){
+      keepDups[[i]] <- tmp
+    }
+    else if(numReps > 2){
+      keepDups[[i]] <- subset(tmp,COMBO_ID %in% sample(unique(tmp$COMBO_ID), 2))
+    }
+  }
+  keepDups <- dplyr::bind_rows(keepDups)
+  return(keepDups)
+}
+set.seed(09112019)
+ccleRepCombos <- ccleReps(dat = norm_ccle)
+```
+
+```{r process_AUC}
+# AUC
+# AUC for all combos
+getAUC <- function(rv, conc){
+  conc <- log2(conc)
+  RV <- approx(x = conc, y = rv, xout = sort(conc))
+  return(pracma::trapz(RV$x, RV$y)/(max(conc) - min(conc)))
+}
+ccleAUC <- norm_ccle[,c("CELL_LINE_NAME","COMPOUND","COMBO_ID")]
+ccleAUC <- ccleAUC[!duplicated(ccleAUC),]
+ccleAUC$MUC <- NA
+ccleAUC$T_MUC <- NA
+for(i in 1:nrow(ccleAUC)){
+  tmp <- subset(norm_ccle, COMBO_ID == ccleAUC$COMBO_ID[i])
+  ccleAUC[i,4] <- getAUC(rv = tmp$RV_MUC, conc = tmp$CONCENTRATION)
+  ccleAUC[i,5] <- getAUC(rv = tmp$TRV_MUC, conc = tmp$CONCENTRATION)
+}
+save(ccleAUC, file = paste0(data_dir, "processed/ccleAUC.rda"), compress = "xz")
+```
+
+```{r process_AUC_replicates}
+# AUC for replicate combos
+# * create a single row for each replicated combo
+mergeReps_ccle <- function(dat){
+
+  # take one replicate from each combo
+  tmp1 <- dat[!duplicated(dat[,1:2]),]
+
+  # take the other replicate from each combo
+  tmp2 <- dat[duplicated(dat[,1:2]),]
+
+  # merge them together
+  return(merge(x = tmp1, y = tmp2, by = c("CELL_LINE_NAME","COMPOUND")))
+}
+
+# * get AUCs for the replicates
+ccleAUC_dup <- subset(ccleAUC, COMBO_ID %in% ccleRepCombos$COMBO_ID)
+ccleAUC_group <- mergeReps_ccle(dat = ccleAUC_dup)
+save(ccleAUC_group, file = paste0(data_dir, "processed/ccleAUC_group.rda"),
+     compress = "xz")
+```

@@ -1,0 +1,132 @@
+---
+title: "plots_drugL685458"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# load library
+library(plotDrugScreen)
+library(ggplot2)
+
+# set directory
+output_dir = "../output/"
+
+# load data
+data(raw_ccle)
+data(norm_ccle)
+data(ccleAUC)
+```
+
+```{r drugL685458_1}
+# * select the drug of interest
+ccle_use <- subset(ccleAUC, COMPOUND == "CGP055750-NX-1")
+ccle_use <- merge(x = ccle_use, y = raw_ccle[,c(4,13)])
+ccle_use <- ccle_use[!duplicated(ccle_use),]
+ccle_use$SLOPE <- NA
+```
+
+```{r drugL685458_2}
+# * fit linear regression to each combo
+ccle_lm <- subset(raw_ccle, COMBO_ID %in% ccle_use$COMBO_ID, select = 11:13)
+ccle_lm$CONCENTRATION <- log2(ccle_lm$CONCENTRATION)
+for(i in 1:nrow(ccle_use)){
+  tmp <- subset(ccle_lm, COMBO_ID == ccle_use$COMBO_ID[i])
+  ccle_use[i,7] <- lm(VALUE ~ CONCENTRATION, data = tmp)$coeff[2]
+}
+
+# * for all CL:
+nrow(ccle_use)
+length(unique(ccle_use$CELL_LINE_NAME))
+summary(ccle_use[,c("MUC","SLOPE")])
+sum(ccle_use$MUC > 1)
+sum(ccle_use$SLOPE > 0)
+```
+
+```{r drugL685458_3}
+pdf(paste0(output_dir, "slope_hist.pdf"), width = 9)
+ggplot(data = ccle_use) +
+  geom_histogram(aes(x = SLOPE), bins = 40) +
+  labs(x = "slope") +
+  coord_cartesian(xlim = c(-0.54,0.16)) +
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14))
+dev.off()
+```
+
+```{r drugL685458_4}
+# * for CLs that appear in both column 18 and 36:
+both_cols <- names(which(apply(table(ccle_use$COLUMN_ID, ccle_use$CELL_LINE_NAME),
+                               2, function(x) sum(x != 0) == 2)))
+ccle_use_both <- subset(ccle_use, CELL_LINE_NAME %in% both_cols)
+length(both_cols)
+```
+
+```{r drugL685458_5}
+# histograms of slope and AUC
+pdf(paste0(output_dir, "hist_cols_slope.pdf"), width = 9, height = 9)
+ggplot() +
+  geom_histogram(data = subset(ccle_use_both, COLUMN_ID == 18),
+                 aes(x = SLOPE, fill = "blue"), binwidth = 0.01, alpha = 0.7) +
+  geom_histogram(data = subset(ccle_use_both, COLUMN_ID == 36),
+                 aes(x = SLOPE, fill = "orange"), binwidth = 0.01, alpha = 0.7) +
+  labs(x = "slope") +
+  scale_fill_manual(name = "", values = c("blue","orange"),
+                    labels = c("Col 18","Col 36")) +
+  theme(axis.text = element_text(size = 19),
+        axis.title = element_text(size = 22),
+        legend.text = element_text(size = 22))
+dev.off()
+
+pdf(paste0(output_dir, "hist_cols_AUC.pdf"), width = 9, height = 9)
+ggplot() +
+  geom_histogram(data = subset(ccle_use_both, COLUMN_ID == 18),
+                 aes(x = MUC, fill = "blue"), binwidth = 0.02, alpha = 0.7) +
+  geom_histogram(data = subset(ccle_use_both, COLUMN_ID == 36),
+                 aes(x = MUC, fill = "orange"), binwidth = 0.02, alpha = 0.7) +
+  labs(x = "AUC") +
+  scale_fill_manual(name = "", values = c("blue","orange"),
+                    labels = c("Col 18","Col 36")) +
+  coord_cartesian(xlim = c(0.3,1.8)) +
+  theme(axis.text = element_text(size = 19),
+        axis.title = element_text(size = 22),
+        legend.text = element_text(size = 22))
+dev.off()
+```
+
+```{r drugL685458_6}
+# scatterplot of CL vs. slope
+# * randomly sample 50 cell lines to make visualization easier
+set.seed(09102020)
+tmp <- sample(unique(ccle_use_both$CELL_LINE_NAME), 50)
+tmp <- subset(ccle_use_both, CELL_LINE_NAME %in% tmp)
+pdf(paste0(output_dir, "ccle_dup.pdf"), width = 15, height = 7)
+ggplot(data = tmp, aes(x = CELL_LINE_NAME, y = SLOPE,
+                       color = as.factor(COLUMN_ID))) +
+  geom_point(size = 2) +
+  labs(color = "Column", x = "cell line", y = "slope") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 10),
+        axis.text.y = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        legend.text = element_text(size = 20),
+        legend.title = element_text(size = 20)) +
+  guides(color = guide_legend(override.aes = list(size=5)))
+dev.off()
+```
+
+```{r drugL685458_7}
+# dose-response plots with low first and last doses
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotDR_ccle(combo1 = 23278, combo2 = NA, title = "Column 18")
+toPlot[[2]] <- plotDR_ccle(combo1 = 40362, combo2 = NA, title = "Column 36")
+pdf(paste0(output_dir, "ccle_edge.pdf"), width = 10)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+
+# another example
+# toPlot[[1]] <- plotDR_ccle(combo1 = 23200, combo2 = NA)
+# toPlot[[2]] <- plotDR_ccle(combo1 = 40380, combo2 = NA)
+```

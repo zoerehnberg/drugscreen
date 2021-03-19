@@ -1,0 +1,148 @@
+---
+title: "match_GDSC_CCLE"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# set directories
+data_dir = "../data/"
+
+# needed data
+load(paste0(data_dir, "original/gdsc_nlme_stats.rda"))
+load(paste0(data_dir, "processed/raw_gdsc.rda"))
+load(paste0(data_dir, "processed/raw_ccle.rda"))
+```
+
+```{r}
+# DRUG MAP
+# * Barretina, J., Caponigro, G., Stransky, N. et al. Addendum: The Cancer Cell Line Encyclopedia enables predictive modelling of anticancer drug sensitivity. Nature 565, E5–E6 (2019). https://doi.org/10.1038/s41586-018-0722-x
+#   - accessed on 3/5/2021 from: "https://www.nature.com/articles/s41586-018-0722-x/tables/2"
+# * The Cancer Cell Line Encyclopedia Consortium., Broad Institute., Stransky, N. et al. Pharmacogenomic agreement between two cancer cell line data sets. Nature 528, 84–87 (2015). https://doi.org/10.1038/nature15736
+
+# * drug names from GDSC/CCLE paper
+PAPER_DRUG <- c("Nilotinib","Nilotinib","17-AAG","PHA-665752",
+                "Lapatinib","Nutlin-3","Nutlin-3","AZD0530",
+                "AZD0530","PF2341066","Sorafenib","PD-0325901",
+                "PD-0332991","Paclitaxel","AZD6244","PLX4720",
+                "PLX4720","TAE684","Erlotinib")
+# * CCLE drug names
+CCLE_DRUG <- c("NVP-AMN107-AA-2", "NVP-AMN107-NX-5","NVP-BAG500-NX-4",
+               "NVP-BBD023-NX-2","NVP-BCZ548-AN-1","NVP-BEP453-NX-8",
+               "NVP-BEP453-NX-5","NVP-BHT496-NX-2","NVP-BHT496-NX-3",
+               "NVP-BQK827-AA-1","NVP-LBK294-NX-2","NVP-LBW624-NX-2",
+               "NVP-LCY393-NX-3","NVP-LEE850-NX-1","NVP-LFE158-NX-3",
+               "NVP-LFL230-NX-3","NVP-LFL230-NX-3","NVP-TAE684-NX-3",
+               "NVP-XBX005-NX-1")
+# * GDSC drug names
+GDSC_DRUG <- c(1013, 1013, 1026, 6, 119, 1047, 1047, 38, 38, 37,
+               30, 1060, 1054, 11, 1062, 1036, 1371, 35, 1)
+
+drugVersion <- data.frame(PAPER_DRUG, CCLE_DRUG, GDSC_DRUG)
+```
+
+```{r}
+# GDSC COMBOS
+matchGDSC <- subset(raw_gdsc, DRUG_ID %in% drugVersion$GDSC_DRUG,
+                    select = c("COSMIC_ID","CELL_LINE_NAME","DRUG_ID"))
+matchGDSC <- matchGDSC[!duplicated(matchGDSC),]
+
+# * simplify cell line name
+matchGDSC$regCL <- toupper(gsub("[[:punct:] ]", "", matchGDSC$CELL_LINE_NAME))
+
+# * add maxc for GDSC combos
+tmp <- subset(gdsc_nlme_stats, DRUG_ID_lib %in% drugVersion$GDSC_DRUG,
+              select = c("CL", "DRUG_ID_lib","maxc"))
+tmp <- tmp[!duplicated(tmp),]
+
+matchGDSC <- merge(x = matchGDSC, y = tmp,
+                   by.x = c("COSMIC_ID","DRUG_ID"),
+                   by.y = c("CL", "DRUG_ID_lib"))
+```
+
+```{r}
+# CCLE COMBOS
+matchCCLE <- subset(raw_ccle, COMPOUND %in% drugVersion$CCLE_DRUG,
+                    select = c("CELL_LINE_NAME","COMPOUND"))
+matchCCLE <- matchCCLE[!duplicated(matchCCLE),]
+
+# * simplify cell line name
+matchCCLE$regCL <- toupper(gsub("[[:punct:] ]", "", matchCCLE$CELL_LINE_NAME))
+
+# * add longer version of CCLE names
+tmp <- readr::read_csv(paste0(data_dir, "original/processedCCLEdata.csv"))
+tmp <- tmp[,1:2]
+tmp <- tmp[!duplicated(tmp),]
+names(tmp) <- c("longName", "shortName")
+matchCCLE_paper <- subset(tmp, shortName %in% matchCCLE$CELL_LINE_NAME)
+```
+
+```{r}
+# DIRECTLY MAP CELL_LINE_NAME IN raw_gdsc TO raw_ccle
+# GDSC
+# * add alternative drug name
+tmp.gdsc <- merge(x = drugVersion[,c("GDSC_DRUG","PAPER_DRUG")],
+                  y = matchGDSC, by.x = "GDSC_DRUG", by.y ="DRUG_ID")
+tmp.gdsc <- tmp.gdsc[!duplicated(tmp.gdsc),]
+
+# CCLE
+# * add alternative drug name
+tmp.ccle <- merge(x = drugVersion[,c("CCLE_DRUG","PAPER_DRUG")],
+                  y = matchCCLE, by.x = "CCLE_DRUG", by.y = "COMPOUND")
+tmp.ccle <- tmp.ccle[!duplicated(tmp.ccle),]
+
+# * merge these together on simplified cell line name and paper drug name
+dataMap_direct <- merge(x = tmp.gdsc, y = tmp.ccle, by = c("regCL","PAPER_DRUG"))
+dataMap_direct[,c("regCL", "PAPER_DRUG")] <- NULL
+names(dataMap_direct) <- c("GDSC_DRUG","GDSC_CL","GDSC_CL_NAME",
+                           "GDSC_MAXC","CCLE_DRUG","CCLE_CL")
+```
+
+```{r}
+# FROM GDSC/CCLE PAPER
+# * get mapping and remove NAs
+dataMap_paper <- readxl::read_excel(paste0(data_dir, "original/GDSC_to_CCLE.xlsx"),
+                                    range = readxl::cell_cols("B:D"), na = "NA")
+dataMap_paper <- dataMap_paper[complete.cases(dataMap_paper),]
+
+# * get drugs
+dataMap_paper <- merge(x = drugVersion, y = dataMap_paper,
+                       by.x = "PAPER_DRUG", by.y = "drug")
+
+# * get GDSC cell line COSMIC IDs
+dataMap_paper$gdsc.name <- toupper(gsub("[[:punct:] ]", "",
+                                        dataMap_paper$gdsc.name))
+dataMap_paper <- merge(x = dataMap_paper, y = matchGDSC,
+                       by.x = c("gdsc.name","GDSC_DRUG"),
+                       by.y = c("regCL", "DRUG_ID"))
+
+# * get CCLE cell lines
+dataMap_paper <- merge(x = dataMap_paper, y = matchCCLE_paper,
+                       by.x = "ccle.name", by.y = "longName")
+
+# * clean up dataframe
+dataMap_paper[,c("ccle.name","gdsc.name","PAPER_DRUG")] <- NULL
+names(dataMap_paper)[3:6] <- c("GDSC_CL","GDSC_CL_NAME",
+                               "GDSC_MAXC","CCLE_CL")
+dataMap_paper <- dataMap_paper[,c("GDSC_DRUG","GDSC_CL","GDSC_CL_NAME",
+                                  "GDSC_MAXC","CCLE_DRUG","CCLE_CL")]
+```
+
+```{r}
+# COMBINE THESE MAPS
+dataMap <- rbind(dataMap_direct, dataMap_paper)
+map_gdsc_ccle <- dataMap[!duplicated(dataMap),]
+save(map_gdsc_ccle, file = paste0(data_dir, "processed/map_gdsc_ccle.rda"),
+     compress = "xz")
+```
+
+```{r}
+dim(map_gdsc_ccle)
+length(unique(map_gdsc_ccle$GDSC_DRUG))
+length(unique(map_gdsc_ccle$CCLE_DRUG))
+length(unique(map_gdsc_ccle$GDSC_CL))
+length(unique(map_gdsc_ccle$CCLE_CL))
+```

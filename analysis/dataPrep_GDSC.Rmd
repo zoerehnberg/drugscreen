@@ -1,0 +1,214 @@
+---
+title: "dataPrep_GDSC"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+library(gdscIC50)
+
+# set directories
+data_dir = "../data/"
+
+# needed data
+load(paste0(data_dir, "original/gdsc_v17.rda"))
+load(paste0(data_dir, "original/gdsc_nlme_stats.rda"))
+```
+
+```{r process_raw}
+# RAW DATA
+# * put raw intensities on the log2 scale
+# * calculate median untreated control intensity for each scan
+# * determine the test site for each scan
+# * keep only variables of interest
+prepGDSC <- function(dat = gdsc_v17){
+  # log the intensities -- USING LOG BASE 2
+  dat$INTENSITY <- log2(dat$INTENSITY)
+
+  # get site for each plate
+  plateInfo <- subset(dat, !is.na(DRUG_ID), select = c("SCAN_ID","DRUG_ID"))
+  plateInfo <- plateInfo[!duplicated(plateInfo$SCAN_ID),]
+  plateInfo$SITE <- ifelse(plateInfo$DRUG_ID > 1000, "WTSI", "MGH")
+  plateInfo$DRUG_ID <- NULL
+
+  # get median untreated controls for each plate
+  plateInfo$UNTREAT <- NA
+  tmp.untreat <- subset(dat, TAG == "NC-0", select = c("SCAN_ID","INTENSITY"))
+  for(i in 1:nrow(plateInfo)){
+    plateInfo[i,3] <- median(subset(tmp.untreat,
+                                    SCAN_ID == plateInfo$SCAN_ID[i])$INTENSITY)
+  }
+
+  return.dat <- merge(x = dat, y = plateInfo, by = "SCAN_ID", all = TRUE)
+
+  # keep only the variables of interest
+  return.dat <- return.dat[,c("SCAN_ID","DATE_CREATED","COSMIC_ID",
+                              "CELL_LINE_NAME","DRUGSET_ID","ASSAY","SITE",
+                              "POSITION","TAG","DRUG_ID","CONC","UNTREAT",
+                              "INTENSITY")]
+  return(return.dat)
+}
+raw_gdsc <- prepGDSC()
+save(raw_gdsc, file = paste0(data_dir, "processed/raw_gdsc.rda"), compress = "xz")
+```
+
+```{r process_relative_viability}
+# RELATIVE VIABILITIES
+norm_gdsc <- subset(raw_gdsc, !is.na(DRUG_ID),
+                    select = c("COSMIC_ID","DRUG_ID","SCAN_ID", "TAG","CONC",
+                               "UNTREAT","INTENSITY"))
+norm_gdsc$INTENSITY <- 2^norm_gdsc$INTENSITY
+norm_gdsc$UNTREAT <- 2^norm_gdsc$UNTREAT
+names(norm_gdsc)[6] <- "MUC"
+
+# get relative viabilities (uncapped and capped)
+norm_gdsc$RV_MUC <- norm_gdsc$INTENSITY/norm_gdsc$MUC
+norm_gdsc$TRV_MUC <- ifelse(norm_gdsc$RV_MUC > 1, 1, norm_gdsc$RV_MUC)
+save(norm_gdsc, file = paste0(data_dir, "processed/norm_gdsc.rda"), compress = "xz")
+```
+
+```{r process_AUC}
+# AUC
+getAUC <- function(rv, conc){
+  conc <- log2(conc)
+  RV <- approx(x = conc, y = rv, xout = sort(conc))
+  return(pracma::trapz(RV$x, RV$y)/(max(conc) - min(conc)))
+}
+gdscAUC <- norm_gdsc[,c("COSMIC_ID","DRUG_ID")]
+gdscAUC <- gdscAUC[!duplicated(gdscAUC),]
+gdscAUC$MUC <- NA
+gdscAUC$T_MUC <- NA
+for(i in 1:nrow(gdscAUC)){
+  tmp <- subset(norm_gdsc, COSMIC_ID == gdscAUC$COSMIC_ID[i] &
+                  DRUG_ID == gdscAUC$DRUG_ID[i])
+  gdscAUC[i,3] <- getAUC(rv = tmp$RV_MUC, conc = tmp$CONC)
+  gdscAUC[i,4] <- getAUC(rv = tmp$TRV_MUC, conc = tmp$CONC)
+}
+save(gdscAUC, file = paste0(data_dir, "processed/gdscAUC.rda"), compress = "xz")
+```
+
+```{r process_adjusted1}
+# ADJUSTED DATA
+# * get residuals for all GDSC data
+# * adjust with linear regression based on (1) both untreated controls and
+# drugged wells or (2) only untreated controls
+getSpatialResid <- function(dat = raw_gdsc, plate, type = "linear",
+                            onlyUC = FALSE){
+  # prep data
+  all.dat <- subset(dat, SCAN_ID == plate & (!is.na(DRUG_ID) | TAG == "NC-0"),
+                    select = c("POSITION","TAG","DRUG_ID","CONC","INTENSITY"))
+  uc_loc <- subset(all.dat, TAG == "NC-0")$POSITION
+
+  # determine number of wells
+  if(max(all.dat$POSITION) > 100){
+    nwells <- 384
+    ROW <- rep(1:16, each = 24)
+    COL <- rep(1:24, 16)
+  }
+  else{
+    nwells <- 96
+    ROW <- rep(1:8, each = 12)
+    COL <- rep(1:12, 8)
+  }
+
+  # set up the regression data
+  if(onlyUC){
+    reg.dat <- subset(all.dat, TAG == "NC-0")
+    vname <- paste0(type, "_UC")
+  }
+  else{
+    reg.dat <- all.dat
+    vname <- paste0(type, "_ALL")
+  }
+
+  INTENSITY <- rep(NA, nwells)
+  INTENSITY[reg.dat$POSITION] <- reg.dat$INTENSITY
+  reg.dat <- data.frame(INTENSITY, ROW, COL)
+
+  # fit regression and get residuals
+  if(nwells == 96 & onlyUC){
+    if(type == "linear") mod <- lm(INTENSITY ~ ROW, data = reg.dat)
+    else mod <- loess(INTENSITY ~ ROW, data = reg.dat, normalize = FALSE,
+                    span = 0.75, degree = 1)
+  }
+  else{
+    if(type == "linear") mod <- lm(INTENSITY ~ ROW + COL, data = reg.dat)
+    else mod <- loess(INTENSITY ~ ROW + COL, data = reg.dat, normalize = FALSE,
+                    span = 0.75, degree = 1)
+  }
+
+  return.dat <- data.frame(SCAN_ID = plate, POSITION = 1:nwells, ROW, COL,
+                           INTENSITY = NA)
+  return.dat$INTENSITY[all.dat$POSITION] <- all.dat$INTENSITY
+  return.dat$RESID <- return.dat$INTENSITY - predict(mod, newdata = return.dat)
+
+  # scale residuals (new mean untreated controls = raw mean untreated controls)
+  fac <- mean(subset(all.dat, POSITION %in% uc_loc)$INTENSITY) -
+    mean(subset(return.dat, POSITION %in% uc_loc)$RESID)
+  return.dat$RESID <- return.dat$RESID + fac
+  names(return.dat)[6] <- vname
+  return.dat$INTENSITY <- NULL
+  return(return.dat)
+}
+# * use the GDSC pipeline to get new AUC estimates
+get_GDSC_fit <- function(dat){
+  fit_data <- removeFailedDrugs(dat)
+  fit_data <- removeMissingDrugs(fit_data)
+  fit_data <- normalizeData(fit_data, trim = TRUE, neg_control = "NC-0",
+                            pos_control = "B")
+  fit_data <- setConcsForNlme(fit_data, group_conc_ranges = FALSE)
+  fit_data <- prepNlmeData(fit_data, cl_id = "COSMIC_ID",
+                           drug_specifiers = c("DRUG_ID_lib", "maxc"))
+  fit_model <- fitModelNlmeData(fit_data, isLargeData = TRUE)
+  fit_stats <- calcNlmeStats(fit_model, fit_data)
+  return(fit_stats)
+}
+
+# * get residuals for linear regression
+all_scn <- unique(raw_gdsc$SCAN_ID)
+all_resid <- vector(mode = "list", length = length(all_scn))
+for(j in 1:length(all_scn)){
+  scn <- all_scn[j]
+  lr_resid_all <- getSpatialResid(plate = scn)
+  lr_resid_uc <- getSpatialResid(plate = scn, onlyUC = TRUE)
+  tmp <- merge(x = lr_resid_all, lr_resid_uc,
+               by = c("SCAN_ID","POSITION","ROW","COL"))
+  all_resid[[j]] <- tmp
+}
+all_resid <- dplyr::bind_rows(all_resid)
+```
+
+```{r process_adjusted2}
+# * only keep the non-missing drugged wells and the untreated control wells
+all_resid <- subset(all_resid, !is.na(linear_ALL))
+all_resid$linear_ALL <- 2^all_resid$linear_ALL
+all_resid$linear_UC <- 2^all_resid$linear_UC
+
+# * merge the residualized data with GDSC data
+resid_data <- merge(x = gdsc_v17, y = all_resid, by = c("SCAN_ID","POSITION"),
+                    all.x = TRUE)
+resid_data$linear_ALL <- ifelse(is.na(resid_data$linear_ALL), resid_data$INTENSITY,
+                                resid_data$linear_ALL)
+resid_data$linear_UC <- ifelse(is.na(resid_data$linear_UC), resid_data$INTENSITY,
+                               resid_data$linear_UC)
+```
+
+```{r process_adjusted3}
+# 1. linear regression on all data
+tmp <- resid_data[,-20]
+names(tmp)[c(16,19)] <- c("INTENSITY_OLD","INTENSITY")
+resid_stats_ALL <- get_GDSC_fit(tmp)
+```
+
+```{r process_adjusted4}
+# 2. linear regression on untreated controls
+tmp <- resid_data[,-19]
+names(tmp)[c(16,19)] <- c("INTENSITY_OLD","INTENSITY")
+resid_stats_UC <- get_GDSC_fit(tmp)
+
+resid_gdsc <- list(resid_stats_ALL, resid_stats_UC)
+save(resid_gdsc, file = paste0(data_dir, "processed/resid_gdsc.rda"), compress = "xz")
+```

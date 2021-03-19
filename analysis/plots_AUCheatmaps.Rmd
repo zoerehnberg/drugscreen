@@ -1,0 +1,195 @@
+---
+title: "plots_AUCheatmaps"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# load library
+library(plotDrugScreen)
+library(ggplot2)
+
+# set directory
+output_dir = "../output/"
+
+# load data
+data(gdscAUC)
+data(GDSC_cells)
+data(GDSC_drugs)
+data(ccleAUC)
+data(map_gdsc_ccle)
+```
+
+```{r prepare2}
+# * tissue and drug annotation data from GDSC
+GDSC_drugs <- GDSC_drugs[,c(1,5)]
+names(GDSC_drugs) <- c("DRUG_ID","TARGET")
+```
+
+# GDSC
+
+```{r GDSC}
+# * combine annotation and AUC data
+plot.dat <- merge(x = gdscAUC, y = GDSC_cells[,2:4], by = "COSMIC_ID", all.x = TRUE)
+plot.dat <- merge(x = plot.dat, y = GDSC_drugs, by = "DRUG_ID", all.x = TRUE)
+
+# 8 combos with MUC > 2 -- set them equal to 2 for ease of plotting
+plot.dat$MUC_adj <- ifelse(plot.dat$MUC > 2, 2, plot.dat$MUC)
+
+# * sort and format cell lines and drugs
+plot.dat <- plot.dat[order(plot.dat[,5], plot.dat[,6]),]
+plot.dat$COSMIC_ID <- as.character(plot.dat$COSMIC_ID)
+plot.dat$COSMIC_ID <- factor(plot.dat$COSMIC_ID,
+                             levels = unique(plot.dat$COSMIC_ID))
+
+tmp <- plot.dat[,c(1,7)]
+tmp <- tmp[!duplicated(tmp),]
+tmp <- tmp[order(tmp$TARGET),]
+plot.dat$DRUG_ID <- as.character(plot.dat$DRUG_ID)
+plot.dat$DRUG_ID <- factor(plot.dat$DRUG_ID, levels = tmp$DRUG_ID)
+```
+
+```{r GDSC_supplement}
+# * make plot
+x.labs <- plot.dat[!duplicated(plot.dat$COSMIC_ID),c(2,5)]
+y.labs <- tmp
+muc_vals <- c(0,(c(0.25,0.5,0.75,1,1.25,1.5) - min(plot.dat$MUC_adj))/
+                (max(plot.dat$MUC_adj) - min(plot.dat$MUC_adj)),1)
+pdf(paste0(output_dir, "heat_GDSC_all.pdf"), width = 85, height = 35)
+ggplot(data = plot.dat, aes(x = COSMIC_ID, y = DRUG_ID)) +
+  geom_tile(aes(fill = MUC_adj)) +
+  scale_fill_gradientn(colours = c("darkblue","mediumblue","blue","lightblue",
+                                   "white","pink","red","darkred"),
+                       values = muc_vals, guide = "colorbar") +
+  scale_x_discrete(breaks = x.labs$COSMIC_ID,
+                   labels = interleave(as.character(x.labs$COSMIC_ID)[c(T,F)], "")[-1058]) +
+  scale_y_discrete(breaks = y.labs$DRUG_ID) +
+  labs(x = "Cell Lines", y = "Drugs", title = "", fill = "AUC") +
+  theme(panel.background = element_rect(fill = "black",  color = NA),
+        panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title = element_text(size = 50),
+        legend.title = element_text(size = 50),
+        legend.text = element_text(size = 45),
+        legend.position = "bottom",
+        legend.key.width = unit(10, "cm")) +
+  geom_vline(xintercept = (which(!duplicated(x.labs$Site)) - 0.5),
+             color = "green", size = 1.5)
+dev.off()
+```
+
+# CCLE
+
+```{r CCLE1}
+# * prepare data
+ccleReps <- function(dat){
+  drugCL <- dat[,c("CELL_LINE_NAME","COMPOUND")]
+  drugCL <- drugCL[!duplicated(drugCL),]
+
+  keepDups <- vector(mode = "list", length = nrow(drugCL))
+  for(i in 1:nrow(drugCL)){
+    tmp <- subset(dat, CELL_LINE_NAME == drugCL[i,1] &
+                    COMPOUND == drugCL[i,2])
+    numReps <- length(unique(tmp$COMBO_ID))
+    if(numReps == 1){
+      keepDups[[i]] <- tmp
+    }
+    else if(numReps > 1){
+      keepDups[[i]] <- subset(tmp,
+                              COMBO_ID %in% sample(unique(tmp$COMBO_ID), 1))
+    }
+  }
+  keepDups <- dplyr::bind_rows(keepDups)
+  return(keepDups)
+}
+set.seed(06172020)
+ccleAUC_nodup <- ccleReps(ccleAUC)
+```
+
+```{r CCLE2}
+# * get drug and CL annotations
+cross_CL <- map_gdsc_ccle[,c(2,6)]
+cross_CL <- cross_CL[!duplicated(cross_CL),]
+cross_CL <- merge(x = cross_CL, y = GDSC_cells[,2:4], by.x = "GDSC_CL",
+                  by.y = "COSMIC_ID")
+
+cross_drug <- map_gdsc_ccle[,c(1,5)]
+cross_drug <- cross_drug[!duplicated(cross_drug),]
+cross_drug <- merge(x = cross_drug, y = GDSC_drugs, by.x = "GDSC_DRUG",
+                    by.y = "DRUG_ID")
+cross_drug <- cross_drug[!duplicated(cross_drug$CCLE_DRUG),2:3]
+cross_drug$CCLE_DRUG <- as.character(cross_drug$CCLE_DRUG)
+
+plot.dat <- ccleAUC_nodup[,c(1,2,4,5)]
+plot.dat <- merge(x = plot.dat, y = cross_CL[,2:4], by.x = "CELL_LINE_NAME",
+                  by.y = "CCLE_CL", all.x = TRUE)
+plot.dat <- merge(x = plot.dat, y = cross_drug, by.x = "COMPOUND",
+                  by.y = "CCLE_DRUG", all.x = TRUE)
+
+# 4 combos with MUC > 2 -- set them equal to 2 for ease of plotting
+plot.dat$MUC_adj <- ifelse(plot.dat$MUC > 2, 2, plot.dat$MUC)
+
+# * organize and sort data
+plot.dat <- plot.dat[order(plot.dat[,5], plot.dat[,6], plot.dat[,7]),]
+plot.dat$CELL_LINE_NAME <- factor(plot.dat$CELL_LINE_NAME,
+                                  levels = unique(plot.dat$CELL_LINE_NAME))
+plot.dat$COMPOUND <- factor(plot.dat$COMPOUND,
+                            levels = unique(plot.dat$COMPOUND))
+
+# * make plots
+x.labs <- plot.dat[!duplicated(plot.dat$CELL_LINE_NAME),]
+y.labs <- plot.dat[!duplicated(plot.dat$COMPOUND),c(1,7)]
+muc_vals <- c(0,(c(0.25,0.5,0.75,1,1.25,1.5) - min(plot.dat$MUC_adj))/
+                (max(plot.dat$MUC_adj) - min(plot.dat$MUC_adj)),1)
+```
+
+```{r CCLE_supplement}
+# * for supplement
+pdf(paste0(output_dir, "heat_CCLE_all_supp.pdf"), width = 80, height = 15)
+ggplot(data = plot.dat, aes(x = CELL_LINE_NAME, y = COMPOUND)) +
+  geom_tile(aes(fill = MUC_adj)) +
+  scale_fill_gradientn(colours = c("darkblue","mediumblue","blue","lightblue",
+                                   "white","pink","red","darkred"),
+                       values = muc_vals, guide = "colorbar") +
+  scale_x_discrete(breaks = x.labs$CELL_LINE_NAME,
+                   labels = interleave(as.character(x.labs$CELL_LINE_NAME)[c(T,F)], "")[-610]) +
+  scale_y_discrete(breaks = unique(plot.dat$COMPOUND)) +
+  labs(x = "Cell Lines", y = "Drugs", title = "", fill = "AUC") +
+  theme(panel.background = element_rect(fill = "black", color = "black"),
+        panel.grid = element_blank(),
+        axis.text = element_text(angle = 50, vjust = 1, hjust = 1, size = 12),
+        axis.title = element_text(size = 55),
+        legend.title = element_text(size = 60),
+        legend.text = element_text(size = 50),
+        legend.position = "bottom",
+        legend.key.width = unit(10, "cm")) +
+  geom_vline(xintercept = (which(!duplicated(x.labs$Site)) - 0.5),
+             color = "green", size = 2)
+dev.off()
+```
+
+```{r CCLE_main}
+# for main text
+pdf(paste0(output_dir, "heat_CCLE_all.pdf"), width = 80, height = 20)
+ggplot(data = plot.dat, aes(x = CELL_LINE_NAME, y = COMPOUND)) +
+  geom_tile(aes(fill = MUC_adj)) +
+  scale_fill_gradientn(colours = c("darkblue","mediumblue","blue","lightblue",
+                                   "white","pink","red","darkred"),
+                       values = muc_vals, guide = "colorbar") +
+  labs(x = "Cell Lines", y = "Drugs", title = "", fill = "AUC") +
+  theme(panel.background = element_rect(fill = "black", color = "black"),
+        panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_text(size = 55),
+        legend.title = element_text(size = 60),
+        legend.text = element_text(size = 50),
+        legend.position = "bottom",
+        legend.key.width = unit(10, "cm")) +
+  geom_vline(xintercept = (which(!duplicated(x.labs$Site)) - 0.5),
+             color = "green", size = 2)
+dev.off()
+```

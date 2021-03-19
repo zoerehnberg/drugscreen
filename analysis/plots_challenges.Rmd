@@ -1,0 +1,318 @@
+---
+title: "plots_challenges"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prepare}
+# load library
+library(plotDrugScreen)
+library(ggplot2)
+
+# set directory
+output_dir = "../output/"
+
+# load data
+data(gdsc_nlme_stats)
+data(raw_gdsc)
+data(norm_gdsc)
+data(resid_gdsc)
+dup1 <- c("156","1014","1036","1058")
+dup2 <- c("1066","1526","1371","1527")
+
+data(norm_ccle)
+```
+
+# Capping Relative Viabilities
+
+```{r capping_relative_viabilities}
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotDR_gdsc(CL = 910943, drug1 = 309, drug2 = NA, manScale = 2)
+toPlot[[2]] <- plotDR_ccle(combo1 = 13910, combo2 = NA, manScale = 2)
+pdf(paste0(output_dir, "capping.pdf"), width = 10)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+```
+
+# Dose-Response Curves with Checkerboard Pattern
+
+```{r checkerboard_pattern}
+# * sigmoidal dose-response curves (code taken/adapted from the CancerRxGene GitHub)
+l3_model2 <- function(lx, maxc, xmid, scal){
+  x <- getXfromConc(2^(lx), maxc)
+  yhat <- 1 - logist3(x, xmid, scal)
+  return(yhat)
+}
+modGDSC.plot <- function(model_stats, cell_line, drug_identifier,
+                          xrange = NULL){
+  # prepare the data
+  `%>%` <- dplyr::`%>%`
+  plot_data <- model_stats %>% dplyr::filter_(~CL == cell_line,
+                                              ~drug == drug_identifier)
+  plot_data <- plot_data %>%
+    dplyr::mutate_(lx = ~log(getConcFromX(x,maxc)),
+                   lxmid = ~log(getConcFromX(xmid, maxc)))
+  plot_xmid <- plot_data %>% dplyr::select_(~xmid) %>% dplyr::distinct()
+  plot_scal <- plot_data %>% dplyr::select_(~scal) %>% dplyr::distinct()
+  plot_maxc <- plot_data %>% dplyr::select_(~maxc) %>% dplyr::distinct()
+  plot_low_x <- 1 - plot_scal$scal * log((1 - 0.001)/0.001) +
+    plot_xmid$xmid
+  plot_low_x <- log(getConcFromX(plot_low_x, +plot_maxc$maxc))
+  plot_low_x <- min(c(plot_data$lx, plot_low_x))
+  plot_high_x <- 1 - plot_scal$scal * log(0.001/(1 - 0.001)) +
+    plot_xmid$xmid
+  plot_high_x <- log(getConcFromX(plot_high_x, plot_maxc$maxc))
+  plot_high_x <- max(c(plot_data$lx, plot_high_x))
+
+  if(length(xrange) == 2){
+    plot_low_x <- xrange[1]
+    plot_high_x <- xrange[2]
+  }
+
+  # make the plot
+  p <- ggplot(plot_data) +
+    aes_(x = ~log2(exp(lx)), y = ~1 - yhat) +
+    scale_x_continuous(limits = c(log2(exp(plot_low_x)),
+                                  log2(exp(plot_high_x)))) +
+    # plot the fitted curve
+    stat_function(aes_(x = ~log2(exp(lx))), fun = l3_model2,
+                  args = list(maxc = plot_maxc$maxc,
+                              xmid = plot_xmid$xmid,
+                              scal = plot_scal$scal)) +
+    # add the observed points
+    geom_point(aes_(x = ~log2(exp(lx)), y = ~1 - y),
+               shape = 4, size = 2, stroke = 1.5) +
+    # add the labels
+    labs(x = expression("dose (log"["2 "]*mu*"M)"),
+       y = "relative viability") +
+    theme(plot.title = element_text(size = 18),
+          plot.subtitle = element_text(size = 16),
+          axis.text = element_text(size = 13),
+          axis.title = element_text(size = 16))
+
+  return(p)
+}
+pdf(paste0(output_dir, "checker_sigmoid.pdf"))
+modGDSC.plot(model_stats = gdsc_nlme_stats, cell_line = 687592,
+             drug_identifier = "268_5.12")
+dev.off()
+
+# other examples
+# modGDSC.plot(model_stats = gdsc_nlme_stats,
+#              cell_line = 688031, drug_identifier = "1248_1")
+# modGDSC.plot(model_stats = gdsc_nlme_stats,
+#              cell_line = 946353, drug_identifier = "1062_4")
+# modGDSC.plot(model_stats = gdsc_nlme_stats, cell_line = 724855,
+#              drug_identifier = "1050_4")
+
+# two CCLE replicates -- one with checkerboard and one without
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotDR_ccle(combo1 = 22765, combo2 = NA, title = "")
+toPlot[[2]] <- plotDR_ccle(combo1 = 34004, combo2 = NA, title = "")
+pdf(paste0(output_dir, "checker_reps.pdf"), height = 12)
+multiplot(plotlist = toPlot, cols = 1)
+dev.off()
+
+# other examples:
+# plotDR_ccle(combo1 = 192, combo2 = NA)
+# plotDR_ccle(combo1 = 194, combo2 = NA)
+# plotDR_ccle(combo1 = 15085, combo2 = NA)
+
+# plotDR_ccle(combo1 = 22322, combo2 = NA, manScale = 1.6, title = "")
+# plotDR_ccle(combo1 = 19208, combo2 = NA, manScale = 1.6, title = "")
+```
+
+# Regressing Out Spatial Effects
+
+```{r regression}
+getSpatialResid <- function(dat = raw_gdsc, plate, type = "linear",
+                            onlyUC = FALSE){
+  # prep data
+  all.dat <- subset(dat, SCAN_ID == plate & (!is.na(DRUG_ID) | TAG == "NC-0"),
+                    select = c("POSITION","TAG","DRUG_ID","CONC","INTENSITY"))
+  uc_loc <- subset(all.dat, TAG == "NC-0")$POSITION
+
+  # determine number of wells
+  if(max(all.dat$POSITION) > 100){
+    nwells <- 384
+    ROW <- rep(1:16, each = 24)
+    COL <- rep(1:24, 16)
+  }
+  else{
+    nwells <- 96
+    ROW <- rep(1:8, each = 12)
+    COL <- rep(1:12, 8)
+  }
+
+  # set up the regression data
+  if(onlyUC){
+    reg.dat <- subset(all.dat, TAG == "NC-0")
+    vname <- paste0(type, "_UC")
+  }
+  else{
+    reg.dat <- all.dat
+    vname <- paste0(type, "_ALL")
+  }
+
+  INTENSITY <- rep(NA, nwells)
+  INTENSITY[reg.dat$POSITION] <- reg.dat$INTENSITY
+  reg.dat <- data.frame(INTENSITY, ROW, COL)
+
+  # fit regression and get residuals
+  if(nwells == 96 & onlyUC){
+    if(type == "linear") mod <- lm(INTENSITY ~ ROW, data = reg.dat)
+    else mod <- loess(INTENSITY ~ ROW, data = reg.dat, normalize = FALSE,
+                    span = 0.75, degree = 1)
+  }
+  else{
+    if(type == "linear") mod <- lm(INTENSITY ~ ROW + COL, data = reg.dat)
+    else mod <- loess(INTENSITY ~ ROW + COL, data = reg.dat, normalize = FALSE,
+                    span = 0.75, degree = 1)
+  }
+
+  return.dat <- data.frame(SCAN_ID = plate, POSITION = 1:nwells, ROW, COL,
+                           INTENSITY = NA)
+  return.dat$INTENSITY[all.dat$POSITION] <- all.dat$INTENSITY
+  return.dat$RESID <- return.dat$INTENSITY - predict(mod, newdata = return.dat)
+
+  # scale residuals (new mean untreated controls = raw mean untreated controls)
+  fac <- mean(subset(all.dat, POSITION %in% uc_loc)$INTENSITY) -
+    mean(subset(return.dat, POSITION %in% uc_loc)$RESID)
+  return.dat$RESID <- return.dat$RESID + fac
+  names(return.dat)[6] <- vname
+  return.dat$INTENSITY <- NULL
+  return(return.dat)
+}
+resid_stats_ALL <- resid_gdsc[[1]]
+resid_stats_UC <- resid_gdsc[[2]]
+```
+
+```{r regression_all}
+# 1. linear regression on all data
+# * get correlation plots of AUCs
+get.sigmoidAUC <- function(dat = gdsc_nlme_stats){
+  sigmoidStats <- dat[,c("SCAN_ID","CL","DRUG_ID_lib","maxc","auc")]
+  sigmoidStats <- sigmoidStats[!duplicated(sigmoidStats),]
+  colnames(sigmoidStats)[2:5] <- c("COSMIC_ID","DRUG_ID","MAXC","AUC")
+  return(sigmoidStats)
+}
+sigmoidAUC_ALL <- get.sigmoidAUC(dat = resid_stats_ALL)
+dupAUC_ALL <- reps_gdsc(data = sigmoidAUC_ALL, data2 = resid_stats_ALL)
+dupAUC_ALL <- merge_gdsc(dupAUC_ALL)
+
+dnames <- c("AZD6482", "Refametinib", "PLX-4720", "Pictilisib")
+corrPlot <- function(i, dat = dupAUC){
+  tmp1 <- subset(dat, DRUG_ID.x == dup1[i])
+  toplot[[i]] <- ggplot(data = tmp1, aes(x = AUC.x, y = AUC.y)) +
+    geom_point(alpha = 0.2, size = 2) +
+    scale_x_continuous(limits = c(0,1)) +
+    scale_y_continuous(limits = c(0,1)) +
+    labs(x = paste0("Replicate 1 (ID ",dup1[i],")"),
+         y = paste0("Replicate 2 (ID ",dup2[i],")"), title = dnames[i],
+         subtitle = round(cor(tmp1$AUC.x, tmp1$AUC.y),4)) +
+    theme(title = element_text(size = 16),
+          axis.text = element_text(size = 10),
+          axis.title = element_text(size = 14))
+}
+toplot <- vector(mode = "list", length = 4)
+toplot <- lapply(1:4, corrPlot, dat = dupAUC_ALL)
+pdf(paste0(output_dir, "GDSCcorrAUC_adjusted.pdf"), width = 18, height = 5)
+multiplot(plotlist = toplot, cols = 4)
+dev.off()
+```
+
+```{r regression_UC}
+# 2. linear regression on untreated controls
+# * get correlation plots of AUCs
+sigmoidAUC_UC <- get.sigmoidAUC(dat = resid_stats_UC)
+dupAUC_UC <- reps_gdsc(data = sigmoidAUC_UC, data2 = resid_stats_UC)
+dupAUC_UC <- merge_gdsc(dupAUC_UC)
+
+toplot <- lapply(1:4, corrPlot, dat = dupAUC_UC)
+pdf(paste0(output_dir, "GDSCcorrAUC_adjusted_uc.pdf"), width = 18, height = 5)
+multiplot(plotlist = toplot, cols = 4)
+dev.off()
+```
+
+```{r regression_hurt1}
+# * regressing out spatial effects can hurt
+# in heatmaps:
+spatialRegPlots <- function(plate){
+  plot.heatAdj_gdsc <- function(dat, resid_type = "linear_ALL", title){
+    return(ggplot(data = dat, aes(x = COL, y = ROW)) +
+             geom_tile(aes(fill = get(resid_type)), color = "white") +
+             scale_fill_gradientn(colors = colorspace::diverge_hcl(4)) +
+             scale_x_continuous(breaks = unique(dat$COL),
+                                labels = interleave(seq(1, max(dat$COL), 2), "")) +
+             scale_y_reverse(breaks = unique(dat$ROW),
+                             labels = interleave(seq(1, max(dat$ROW), 2), "")) +
+             labs(x = "", y = "", title = title)  +
+             guides(fill = guide_colorbar(title = expression(atop("Adj. Intensity",
+                                                                  "(log"[2]*")")),
+                                          ticks = FALSE)) +
+             theme(panel.background = element_rect(fill = "black", color = "black"),
+                   panel.grid = element_blank(),
+                   title = element_text(size = 16),
+                   axis.text = element_text(size = 12),
+                   legend.title = element_text(size = 14),
+                   legend.text = element_text(size = 14)))
+  }
+  toPlot <- vector(mode = "list", length = 5)
+  toPlot[[1]] <- plotHeat_gdsc(data = subset(raw_gdsc, !is.na(DRUG_ID) | TAG == "NC-0"),
+                                scan = plate)
+  plot.dat <- getSpatialResid(plate = plate, type = "linear", onlyUC = FALSE)
+  toPlot[[2]] <- plot.heatAdj_gdsc(dat = plot.dat, resid_type = "linear_ALL",
+                                   title = "Linear Regression Adjusted")
+  plot.dat <- getSpatialResid(plate = plate, type = "linear", onlyUC = TRUE)
+  toPlot[[3]] <- plot.heatAdj_gdsc(dat = plot.dat, resid_type = "linear_UC",
+                                   title = "UC Linear Regression Adjusted")
+  toPlot[[4]] <- NULL
+  plot.dat <- getSpatialResid(plate = plate, type = "loess", onlyUC = FALSE)
+  toPlot[[5]] <- plot.heatAdj_gdsc(dat = plot.dat, resid_type = "loess_ALL",
+                                   title = "Loess Regression Adjusted")
+  plot.dat <- getSpatialResid(plate = plate, type = "loess", onlyUC = TRUE)
+  toPlot[[6]] <- plot.heatAdj_gdsc(dat = plot.dat, resid_type = "loess_UC",
+                                   title = "UC Loess Regression Adjusted")
+  return(multiplot(plotlist = toPlot, cols = 3, title = NULL))
+}
+pdf(paste0(output_dir, "clean_reg.pdf"), width = 16, height = 8)
+spatialRegPlots(plate = 53452)
+dev.off()
+pdf(paste0(output_dir, "splotch1_reg.pdf"), width = 16, height = 8)
+spatialRegPlots(plate = 53587)
+dev.off()
+pdf(paste0(output_dir, "splotch2_reg.pdf"), width = 16, height = 8)
+spatialRegPlots(plate = 56314)
+dev.off()
+```
+
+```{r regression_hurt2}
+# in DR curves:
+# * raw data
+toPlot <- vector(mode = "list", length = 2)
+toPlot[[1]] <- plotDR_gdsc(CL = 907043, drug1 = 1010, drug2 = NA,
+                               title = "Raw")
+# * adjusted data
+plot.dat <- getSpatialResid(plate = 53452)
+
+# get median of residualized untreated controls
+uc_loc <- subset(raw_gdsc, SCAN_ID == 53452 & TAG == "NC-0")$POSITION
+resid_muc <- median(subset(plot.dat, POSITION %in% uc_loc)$linear_ALL)
+
+# get residualized relative viabilities
+tmp_resid <- subset(raw_gdsc, SCAN_ID == 53452 & DRUG_ID == 1010,
+                    select = c("SCAN_ID","POSITION","CONC"))
+tmp_resid <- merge(x = plot.dat, y = tmp_resid, by = c("SCAN_ID","POSITION"))
+tmp_resid$RESID <- 2^(tmp_resid$linear_ALL - resid_muc)
+tmp <- subset(norm_gdsc, COSMIC_ID == 907043 & DRUG_ID == 1010)
+tmp <- merge(x = tmp, y = tmp_resid, by = c("SCAN_ID","CONC"))
+names(tmp)[c(8,14)] <- c("RV_MUC_OLD","RV_MUC")
+toPlot[[2]] <- plotDR_gdsc(dat = tmp, CL = 907043, drug1 = 1010, drug2 = NA,
+                               title = "Linear Regression Adjusted")
+pdf(paste0(output_dir, "adj_DR.pdf"), width = 16)
+multiplot(plotlist = toPlot, cols = 2)
+dev.off()
+```
