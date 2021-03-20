@@ -4,7 +4,7 @@
 
 - **Download the release.** This contaians a snapshot of the completed analysis, including all original data, processed data, Rmd scripts, and plots. Several `make` commands can be run to redo analysis and plotting. For example, running `make package`, `make installpackage`, and `make plots` will re-create all plots and allow the exploration of plotting scripts. See the makefile for all possible commands.
 
-- **Download the docker image.** This contaians the completed analysis, including all original data, processed data, Rmd scripts, and plots and can be downloadde from . Running this image will allow an exploration of the analysis through a web browser. Use the command `docker run -it --name <CONTAINER_NAME> -p 127.0.0.1:80:80 drugscreen_analysis` to run. Files can be copied out of the container (e.g. `docker cp <CONTAINER_NAME>:/home/rep/output/ .`). The container should be removed once the exploration is complete (`docker rm <CONTAINER_NAME>`).
+- **Download the docker image.** This contaians the completed analysis, including all original data, processed data, Rmd scripts, and plots and can be downloadde from https://www.dropbox.com/s/lzqvm94d7weazii/drugscreen.tar.gz?dl=0. Running this image will allow an exploration of the analysis through a web browser. Use the command `docker run -it --name <CONTAINER_NAME> -p 127.0.0.1:80:80 drugscreen_analysis` to run. Files can be copied out of the container (e.g. `docker cp <CONTAINER_NAME>:/home/rep/output/ .`). The container should be removed once the exploration is complete (`docker rm <CONTAINER_NAME>`).
 
 ## Drug Screening Shiny App
 
