@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # load library
 library(plotDrugScreen)
 library(ggplot2)
+library(gdscIC50)
 
 # set directory
 output_dir = "../output/"
