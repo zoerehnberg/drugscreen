@@ -1,4 +1,4 @@
-# Technical Error and Plate Design in Drug Screening Studies
+# Technical Variation in Drug Screening Studies
 
 ## Ways to Use This Repository
 
